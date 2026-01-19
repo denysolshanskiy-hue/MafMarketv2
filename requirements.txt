@@ -1,5 +1,6 @@
-python-telegram-bot==20.7
+python-telegram-bot==21.10
 gspread
 google-auth
 Flask
 python-dotenv
+
