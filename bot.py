@@ -57,6 +57,31 @@ from sheets import (
 
 TOKEN = os.getenv("BOT_TOKEN")
 
+# ---------- CACHING SYSTEM ----------
+import time
+
+class BotCache:
+    def __init__(self):
+        self.market_items = None
+        self.players_data = None
+        self.last_update = 0
+        self.ttl = 3600  # Час життя кешу в секундах (1 година)
+
+    def is_expired(self):
+        return (time.time() - self.last_update) > self.ttl
+
+    async def update(self, force=False):
+        if force or self.market_items is None or self.is_expired():
+            print("Refreshing cache from Google Sheets...")
+            # Отримуємо всі дані пакетом (потрібно буде додати функцію в sheets.py)
+            self.market_items = get_market_items() 
+            # Для балансів краще залишити запит до БД або кешувати вибірково, 
+            # але каталог товарів кешуємо обов'язково
+            self.last_update = time.time()
+            print("Cache updated successfully!")
+
+cache = BotCache()
+
 # ---------- MENU ----------
 MENU = ReplyKeyboardMarkup(
     [
@@ -121,7 +146,12 @@ async def my_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------- MARKET ----------
 async def show_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    items = get_market_items()
+    # Перевіряємо кеш перед показом
+    if cache.market_items is None or cache.is_expired():
+        await update.message.reply_text("⏳ Завантажую дані з Google Sheets (це лише раз)...")
+        await cache.update()
+
+    items = cache.market_items # Беремо миттєво з пам'яті
     if not items:
         await update.message.reply_text("❌ Магазин порожній.")
         return
@@ -223,6 +253,13 @@ async def process_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         traceback.print_exc()
         await query.message.reply_text("⚠️ Сталась технічна помилка під час покупки.")
 
+async def refresh_cache_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_user.id) == os.getenv("ADMIN_TELEGRAM_ID"):
+        await cache.update(force=True)
+        await update.message.reply_text("✅ Кеш оновлено! Тепер бот бачить останні зміни з таблиці.")
+    else:
+        await update.message.reply_text("У вас немає прав для цієї команди.")
+
 # ---------- MY PROGRESS ----------
 async def my_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     balance_data = get_balance_by_telegram_id(update.effective_user.id)
@@ -274,9 +311,10 @@ def main():
     app.add_handler(CallbackQueryHandler(open_buy_menu, pattern="^open_buy_menu$"))
     app.add_handler(CallbackQueryHandler(process_buy, pattern="^buy:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
+    app.add_handler(CommandHandler("refresh", refresh_cache_command))
     print("Бот запущений як Web Service")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
+
