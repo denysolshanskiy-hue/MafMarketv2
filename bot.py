@@ -180,7 +180,11 @@ async def open_buy_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    items = get_market_items()
+    # ВИПРАВЛЕНО: Беремо з кешу, а не з Google
+    if cache.market_items is None:
+        await cache.update()
+    
+    items = cache.market_items
     keyboard = []
     for item in items:
         keyboard.append([
@@ -254,11 +258,16 @@ async def process_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("⚠️ Сталась технічна помилка під час покупки.")
 
 async def refresh_cache_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_user.id) == os.getenv("ADMIN_TELEGRAM_ID"):
+    # Додаємо int() для надійності
+    admin_id = os.getenv("ADMIN_TELEGRAM_ID")
+    if admin_id and update.effective_user.id == int(admin_id):
+        await update.message.reply_text("⏳ Оновлюю кеш...")
         await cache.update(force=True)
-        await update.message.reply_text("✅ Кеш оновлено! Тепер бот бачить останні зміни з таблиці.")
+        await update.message.reply_text("✅ Кеш оновлено!")
     else:
-        await update.message.reply_text("У вас немає прав для цієї команди.")
+        print(f"DEBUG: User {update.effective_user.id} tried refresh. Admin is {admin_id}")
+        await update.message.reply_text("❌ Відмовлено в доступі.")
+
 
 # ---------- MY PROGRESS ----------
 async def my_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
