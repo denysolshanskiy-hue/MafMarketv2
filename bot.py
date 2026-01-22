@@ -205,7 +205,7 @@ async def process_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("❌ Помилка: товар або юзер не знайдені.")
         return
 
-    # Перевірка балансу прямо в кеші
+    # Перевірка балансу в поточному кеші
     balance_val = 0
     for r in cache.balance_data[1:]:
         if r[0].strip().lower() == nick.strip().lower():
@@ -218,8 +218,33 @@ async def process_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(f"❌ Недостатньо МК. У вас: {balance_val}")
         return
 
+    # 1. Відправляємо покупку в таблицю
     add_purchase(nick, item["name"], price)
-    await query.message.reply_text(f"✅ *Успішно!* Очікуйте: {item['name']}", parse_mode="Markdown")
+    
+    # 2. ОНОВЛЮЄМО КЕШ (це ключовий момент)
+    # Поки Google Sheets обробляє запис, ми просимо бота перекачати дані
+    await query.message.reply_text("⏳ Обробка покупки та оновлення балансу...")
+    await cache.update(force=True) 
+
+    # 3. Повідомляємо про успіх
+    await query.message.edit_text(
+        f"✅ *Покупка успішна!*\n\n"
+        f"📦 Товар: {item['name']}\n"
+        f"💰 Списано: {price} МК\n"
+        f"📉 Ваш новий баланс оновлено!",
+        parse_mode="Markdown"
+    )
+
+    # Сповіщення адміна (як і було)
+    admin_id = os.getenv("ADMIN_TELEGRAM_ID")
+    if admin_id:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=f"🛍 *Нова покупка!*\n👤 {nick}\n📦 *{item['name']}*\n💰 {price} МК",
+                parse_mode="Markdown"
+            )
+        except: pass
 
 # ---------- PROGRESS (FAST) ----------
 async def my_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -275,5 +300,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
