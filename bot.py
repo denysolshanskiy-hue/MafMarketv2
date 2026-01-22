@@ -56,25 +56,27 @@ class BotCache:
         self.balance_data = None
         self.progress_data = None
         self.last_update = 0
-        self.ttl = 3700  # Авто-оновлення раз на 10 хвилин
+        self.ttl = 3600  # 1 година
 
     def is_expired(self):
+        # Якщо даних взагалі немає — вважаємо, що вони прострочені
+        if self.market_items is None: return True
         return (time.time() - self.last_update) > self.ttl
 
     async def update(self, force=False):
-        if force or self.market_items is None or self.is_expired():
+        # Оновлюємо ТІЛЬКИ якщо форсовано або час вийшов
+        if force or self.is_expired():
             print("🚀 Глобальне оновлення кешу з Google Sheets...")
             try:
                 sh = get_spreadsheet()
-                
-                # Завантажуємо всі листи за один раз
+                # Робимо запити один за одним, але зберігаємо в пам'ять
                 self.market_items = get_market_items()
                 self.players_list = sh.worksheet("Гравці🕵️‍♂️").get_all_values()
                 self.balance_data = sh.worksheet("Авто-баланс🤑").get_all_values()
                 self.progress_data = sh.worksheet("Прогрес📊").get_all_values()
                 
                 self.last_update = time.time()
-                print(f"✅ Кеш оновлено! Гравців: {len(self.players_list)-1}")
+                print(f"✅ Кеш оновлено! Наступне авто-оновлення через годину.")
             except Exception as e:
                 print(f"❌ Помилка оновлення кешу: {e}")
 
@@ -134,31 +136,26 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"⚠️ Помилка: {e}")
 
-# ---------- BALANCE (МАКСИМАЛЬНО ШВИДКО) ----------
+
+# ---------- BALANCE (МИТТЄВО) ----------
 async def my_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 1. Швидка перевірка кешу (без очікування, якщо дані вже є)
+    # Якщо даних немає взагалі - завантажуємо, інакше - використовуємо що є
     if cache.balance_data is None:
-        await update.message.reply_text("⏳ Завантажую дані вперше, почекайте...")
+        await update.message.reply_text("⏳ Завантажую дані (лише раз)...")
         await cache.update()
 
     user_id = update.effective_user.id
     nick = get_user_nick_from_cache(user_id)
     
     if not nick:
-        await update.message.reply_text("❌ Ваш Telegram ID не прив'язаний до ніку. Напишіть свій нік боту.")
+        await update.message.reply_text("❌ Спочатку напишіть свій нік боту для прив'язки.")
         return
 
-    # 2. Пошук суто в пам'яті (0.001 сек)
     search_nick = nick.strip().lower()
-    user_row = None
-    
-    for r in cache.balance_data[1:]:
-        if len(r) > 0 and r[0].strip().lower() == search_nick:
-            user_row = r
-            break
+    user_row = next((r for r in cache.balance_data[1:] if r and r[0].strip().lower() == search_nick), None)
 
     if not user_row:
-        await update.message.reply_text(f"❌ Нік '{nick}' знайдено, але в таблиці балансу його ще немає.")
+        await update.message.reply_text("❌ Дані балансу ще не згенеровані в таблиці.")
         return
 
     def to_int(val):
@@ -278,4 +275,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
