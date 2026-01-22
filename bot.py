@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 if os.path.exists(".env"):
     load_dotenv()
 
-# ---------- WEB SERVER FOR KOYEB (KEEP-ALIVE) ----------
+# ---------- WEB SERVER FOR KOYEB ----------
 flask_app = Flask('')
 
 @flask_app.route('/')
@@ -37,69 +37,85 @@ from telegram.ext import (
     filters,
 )
 
+# Імпортуємо функції
 from sheets import (
+    get_spreadsheet,
     find_player_by_nick,
     bind_telegram_id,
-    get_balance_by_telegram_id,
     get_market_items,
-    add_purchase,
-    get_market_item_by_name,
-    get_progress_by_nick,
-    get_next_goal
+    add_purchase
 )
 
 TOKEN = os.getenv("BOT_TOKEN")
 
-# ---------- CACHING SYSTEM ----------
+# ---------- GLOBAL CACHING SYSTEM ----------
 class BotCache:
     def __init__(self):
         self.market_items = None
+        self.players_list = None
+        self.balance_data = None
+        self.progress_data = None
         self.last_update = 0
-        self.ttl = 3600  # Кеш житиме 1 годину
+        self.ttl = 600  # Авто-оновлення раз на 10 хвилин
 
     def is_expired(self):
         return (time.time() - self.last_update) > self.ttl
 
     async def update(self, force=False):
         if force or self.market_items is None or self.is_expired():
-            print("🚀 Refreshing market cache from Google Sheets...")
-            # Отримуємо товари один раз пакетом
-            self.market_items = get_market_items() 
-            self.last_update = time.time()
-            print(f"✅ Cache updated! Items found: {len(self.market_items) if self.market_items else 0}")
+            print("🚀 Глобальне оновлення кешу з Google Sheets...")
+            try:
+                sh = get_spreadsheet()
+                
+                # Завантажуємо всі листи за один раз
+                self.market_items = get_market_items()
+                self.players_list = sh.worksheet("Гравці🕵️‍♂️").get_all_values()
+                self.balance_data = sh.worksheet("Авто-баланс🤑").get_all_values()
+                self.progress_data = sh.worksheet("Прогрес📊").get_all_values()
+                
+                self.last_update = time.time()
+                print(f"✅ Кеш оновлено! Гравців: {len(self.players_list)-1}")
+            except Exception as e:
+                print(f"❌ Помилка оновлення кешу: {e}")
 
 cache = BotCache()
 
+# ---------- Вспоміжні функції для пошуку в кеші ----------
+def get_user_nick_from_cache(user_id):
+    if not cache.players_list: return None
+    user_id_str = str(user_id)
+    # Шукаємо в 4-му стовпчику (індекс 3)
+    for row in cache.players_list[1:]:
+        if len(row) > 3 and str(row[3]) == user_id_str:
+            return row[1]
+    return None
+
 # ---------- MENU ----------
 MENU = ReplyKeyboardMarkup(
-    [
-        ["🧾 Мій баланс", "🛒 Магазин"],
-        ["📈 Мій прогрес"],
-    ],
+    [["🧾 Мій баланс", "🛒 Магазин"], ["📈 Мій прогрес"]],
     resize_keyboard=True,
 )
 
 # ---------- COMMANDS ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await cache.update() # Підвантажуємо дані при старті
     await update.message.reply_text(
         "Вітаю в MafMarket 🖤\n\nВведіть свій нік, щоб привʼязати акаунт:"
     )
     context.user_data["awaiting_nick"] = True
 
-# ---------- ADMIN COMMANDS ----------
 async def refresh_cache_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_id = os.getenv("ADMIN_TELEGRAM_ID")
     if admin_id and update.effective_user.id == int(admin_id):
-        await update.message.reply_text("⏳ Оновлюю кеш товарів...")
+        await update.message.reply_text("⏳ Оновлюю всі дані з таблиць...")
         await cache.update(force=True)
-        await update.message.reply_text("✅ Кеш оновлено! Тепер магазин працює на нових даних.")
+        await update.message.reply_text("✅ Дані синхронізовано!")
     else:
-        await update.message.reply_text("❌ У вас немає прав для цієї команди.")
+        await update.message.reply_text("❌ Відмовлено в доступі.")
 
 # ---------- AUTH ----------
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data.get("awaiting_nick"):
-        return
+    if not context.user_data.get("awaiting_nick"): return
 
     try:
         nick = update.message.text.strip()
@@ -111,143 +127,117 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         bind_telegram_id(row_index, update.effective_user.id)
         context.user_data["awaiting_nick"] = False
-        await update.message.reply_text(f"✅ Акаунт привʼязано, {nick}!", reply_markup=MENU)
+        
+        await cache.update(force=True) # Оновлюємо кеш після реєстрації
+        await update.message.reply_text(f"✅ Вітаю, {nick}! Акаунт привʼязано.", reply_markup=MENU)
 
     except Exception as e:
-        traceback.print_exc()
         await update.message.reply_text(f"⚠️ Помилка: {e}")
 
-# ---------- BALANCE ----------
+# ---------- BALANCE (FAST) ----------
 async def my_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Тут швидкість залежить від sheets.py
-    data = get_balance_by_telegram_id(update.effective_user.id)
-    if not data:
-        await update.message.reply_text("❌ Баланс не знайдено. Переконайтеся, що ви прив'язали нік.")
+    await cache.update()
+    nick = get_user_nick_from_cache(update.effective_user.id)
+    
+    if not nick:
+        await update.message.reply_text("❌ Спочатку введіть свій нік.")
+        return
+
+    search_nick = nick.strip().lower()
+    user_data = None
+    
+    for r in cache.balance_data[1:]:
+        if r[0].strip().lower() == search_nick:
+            def to_int(val):
+                try: return int(float(str(val).replace(',', '.')))
+                except: return 0
+            user_data = {"nick": r[0], "total": to_int(r[3]), "spent": to_int(r[2])}
+            break
+
+    if not user_data:
+        await update.message.reply_text("❌ Дані про баланс не знайдено.")
         return
 
     await update.message.reply_text(
-        f"🧾 *Ваш баланс*\n\n👤 {data['nick']}\n💰 Баланс МК: *{data['total']}*\n💸 Витрачено: {data['spent']}",
+        f"🧾 *Ваш баланс*\n\n👤 {user_data['nick']}\n💰 Баланс МК: *{user_data['total']}*\n💸 Витрачено: {user_data['spent']}",
         parse_mode="Markdown",
     )
 
-# ---------- MARKET ----------
+# ---------- MARKET (FAST) ----------
 async def show_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # МИТТЄВА ПЕРЕВІРКА КЕШУ
-    if cache.market_items is None or cache.is_expired():
-        await cache.update()
-
+    await cache.update()
     items = cache.market_items
     if not items:
-        await update.message.reply_text("❌ Магазин поки порожній.")
+        await update.message.reply_text("❌ Магазин порожній.")
         return
 
     text = "🛒 *Магазин MafMarket*\n\n"
     for item in items:
-        text += (
-            f"🧾 *{item['name']}*\n"
-            f"💰 {item['price']} МК\n"
-            f"✨ {item['description']}\n"
-            f"🔓 {item['level']}\n\n"
-        )
+        text += f"🧾 *{item['name']}*\n💰 {item['price']} МК\n✨ {item['description']}\n🔓 {item['level']}\n\n"
 
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🛍 Купити", callback_data="open_buy_menu")]])
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
-# ---------- BUY PROCESS ----------
 async def open_buy_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
-    # Беремо товари з кешу - МИТТЄВО
-    if cache.market_items is None:
-        await cache.update()
+    await cache.update()
     
-    items = cache.market_items
-    keyboard = [[InlineKeyboardButton(f"{i['name']} — {i['price']} МК", callback_data=f"buy:{i['name']}")] for i in items]
-
-    await query.message.edit_text("🛒 Оберіть товар для покупки:", reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard = [[InlineKeyboardButton(f"{i['name']} — {i['price']} МК", callback_data=f"buy:{i['name']}")] for i in cache.market_items]
+    await query.message.edit_text("🛒 Оберіть товар:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def process_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    
+    item_name = query.data.split(":", 1)[1]
+    item = next((i for i in cache.market_items if i['name'] == item_name), None)
+    nick = get_user_nick_from_cache(query.from_user.id)
 
-    try:
-        item_name = query.data.split(":", 1)[1]
-        
-        # Шукаємо товар у кеші замість запиту до Google
-        item = next((i for i in cache.market_items if i['name'] == item_name), None) if cache.market_items else None
-        
-        # Якщо в кеші немає, пробуємо прямий запит (про всяк випадок)
-        if not item:
-            item = get_market_item_by_name(item_name)
-        
-        if not item:
-            await query.message.reply_text("❌ Товар не знайдено.")
-            return
-
-        balance = get_balance_by_telegram_id(query.from_user.id)
-        if not balance:
-            await query.message.reply_text("❌ Акаунт не знайдено.")
-            return
-
-        price = int(item["price"])
-        if balance["total"] < price:
-            await query.message.reply_text(f"❌ Бракує коштів.\nЦіна: {price} МК\nУ вас: {balance['total']} МК")
-            return
-
-        add_purchase(balance["nick"], item["name"], price)
-
-        await query.message.reply_text(
-            f"✅ *Покупка успішна!*\n\n🧾 {item['name']}\n💰 {price} МК\n\nОчікуйте на отримання🥰",
-            parse_mode="Markdown"
-        )
-
-        # Сповіщення адміна
-        admin_id = os.getenv("ADMIN_TELEGRAM_ID")
-        if admin_id:
-            try:
-                await context.bot.send_message(
-                    chat_id=admin_id,
-                    text=f"🛍 *Нова покупка!*\n👤 {balance['nick']}\n📦 *{item['name']}*\n💰 {price} МК",
-                    parse_mode="Markdown"
-                )
-            except: pass
-
-    except Exception as e:
-        traceback.print_exc()
-        await query.message.reply_text("⚠️ Технічна помилка при покупці.")
-
-# ---------- MY PROGRESS ----------
-async def my_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    balance_data = get_balance_by_telegram_id(update.effective_user.id)
-    if not balance_data:
-        await update.message.reply_text("❌ Акаунт не знайдено.")
+    if not item or not nick:
+        await query.message.reply_text("❌ Помилка: товар або юзер не знайдені.")
         return
 
-    progress = get_progress_by_nick(balance_data["nick"])
-    if not progress:
+    # Перевірка балансу прямо в кеші
+    balance_val = 0
+    for r in cache.balance_data[1:]:
+        if r[0].strip().lower() == nick.strip().lower():
+            try: balance_val = int(float(str(r[3]).replace(',', '.')))
+            except: pass
+            break
+
+    price = int(item["price"])
+    if balance_val < price:
+        await query.message.reply_text(f"❌ Недостатньо МК. У вас: {balance_val}")
+        return
+
+    add_purchase(nick, item["name"], price)
+    await query.message.reply_text(f"✅ *Успішно!* Очікуйте: {item['name']}", parse_mode="Markdown")
+
+# ---------- PROGRESS (FAST) ----------
+async def my_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await cache.update()
+    nick = get_user_nick_from_cache(update.effective_user.id)
+    if not nick: return
+
+    search_nick = nick.strip().lower()
+    prog = None
+    for r in cache.progress_data[1:]:
+        if r[0].strip().lower() == search_nick:
+            prog = {"nick": r[0], "balance": r[1], "available": r[2], "status": r[3]}
+            break
+    
+    if not prog:
         await update.message.reply_text("❌ Прогрес не знайдено.")
         return
 
-    next_goal = get_next_goal(int(balance_data["total"]))
-    text = (
-        f"📈 *Ваш прогрес*\n\n👤 Нік: {progress['nick']}\n"
-        f"💰 Баланс: *{progress['balance']} МК*\n\n"
-        f"🛒 Доступно:\n{progress['available']}\n\n"
-        f"🎯 Статус: *{progress['status']}*\n\n"
-    )
-    if next_goal:
-        text += f"➡️ *Наступна ціль:*\n{next_goal['name']} — ще {next_goal['remaining']} МК"
-    else:
-        text += "🏆 *Ви досягли максимального рівня!*"
-
+    text = f"📈 *Ваш прогрес*\n\n👤 Нік: {prog['nick']}\n💰 Баланс: *{prog['balance']} МК*\n🎯 Статус: *{prog['status']}*"
     await update.message.reply_text(text, parse_mode="Markdown")
 
 # ---------- MAIN ----------
 def main():
     if not TOKEN: return
     keep_alive()
-
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -259,7 +249,6 @@ def main():
     app.add_handler(CallbackQueryHandler(process_buy, pattern="^buy:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    print("🚀 MafMarket Bot (Optimized) is running on Koyeb...")
     app.run_polling()
 
 if __name__ == "__main__":
