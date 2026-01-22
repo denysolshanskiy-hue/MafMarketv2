@@ -56,7 +56,7 @@ class BotCache:
         self.balance_data = None
         self.progress_data = None
         self.last_update = 0
-        self.ttl = 600  # Авто-оновлення раз на 10 хвилин
+        self.ttl = 3700  # Авто-оновлення раз на 10 хвилин
 
     def is_expired(self):
         return (time.time() - self.last_update) > self.ttl
@@ -134,32 +134,42 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"⚠️ Помилка: {e}")
 
-# ---------- BALANCE (FAST) ----------
+# ---------- BALANCE (МАКСИМАЛЬНО ШВИДКО) ----------
 async def my_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await cache.update()
-    nick = get_user_nick_from_cache(update.effective_user.id)
+    # 1. Швидка перевірка кешу (без очікування, якщо дані вже є)
+    if cache.balance_data is None:
+        await update.message.reply_text("⏳ Завантажую дані вперше, почекайте...")
+        await cache.update()
+
+    user_id = update.effective_user.id
+    nick = get_user_nick_from_cache(user_id)
     
     if not nick:
-        await update.message.reply_text("❌ Спочатку введіть свій нік.")
+        await update.message.reply_text("❌ Ваш Telegram ID не прив'язаний до ніку. Напишіть свій нік боту.")
         return
 
+    # 2. Пошук суто в пам'яті (0.001 сек)
     search_nick = nick.strip().lower()
-    user_data = None
+    user_row = None
     
     for r in cache.balance_data[1:]:
-        if r[0].strip().lower() == search_nick:
-            def to_int(val):
-                try: return int(float(str(val).replace(',', '.')))
-                except: return 0
-            user_data = {"nick": r[0], "total": to_int(r[3]), "spent": to_int(r[2])}
+        if len(r) > 0 and r[0].strip().lower() == search_nick:
+            user_row = r
             break
 
-    if not user_data:
-        await update.message.reply_text("❌ Дані про баланс не знайдено.")
+    if not user_row:
+        await update.message.reply_text(f"❌ Нік '{nick}' знайдено, але в таблиці балансу його ще немає.")
         return
 
+    def to_int(val):
+        try: return int(float(str(val).replace(',', '.')))
+        except: return 0
+
+    total = to_int(user_row[3]) if len(user_row) > 3 else 0
+    spent = to_int(user_row[2]) if len(user_row) > 2 else 0
+
     await update.message.reply_text(
-        f"🧾 *Ваш баланс*\n\n👤 {user_data['nick']}\n💰 Баланс МК: *{user_data['total']}*\n💸 Витрачено: {user_data['spent']}",
+        f"🧾 *Ваш баланс*\n\n👤 {nick}\n💰 Баланс МК: *{total}*\n💸 Витрачено: {spent}",
         parse_mode="Markdown",
     )
 
@@ -216,22 +226,37 @@ async def process_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------- PROGRESS (FAST) ----------
 async def my_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await cache.update()
-    nick = get_user_nick_from_cache(update.effective_user.id)
-    if not nick: return
+    if cache.progress_data is None:
+        await cache.update()
 
-    search_nick = nick.strip().lower()
-    prog = None
-    for r in cache.progress_data[1:]:
-        if r[0].strip().lower() == search_nick:
-            prog = {"nick": r[0], "balance": r[1], "available": r[2], "status": r[3]}
-            break
-    
-    if not prog:
-        await update.message.reply_text("❌ Прогрес не знайдено.")
+    nick = get_user_nick_from_cache(update.effective_user.id)
+    if not nick:
+        await update.message.reply_text("❌ Нік не прив'язано.")
         return
 
-    text = f"📈 *Ваш прогрес*\n\n👤 Нік: {prog['nick']}\n💰 Баланс: *{prog['balance']} МК*\n🎯 Статус: *{prog['status']}*"
+    search_nick = nick.strip().lower()
+    prog_row = None
+    for r in cache.progress_data[1:]:
+        if len(r) > 0 and r[0].strip().lower() == search_nick:
+            prog_row = r
+            break
+    
+    if not prog_row:
+        await update.message.reply_text("❌ Дані прогресу відсутні.")
+        return
+
+    # Витягуємо дані з колонок Прогресу
+    balance_val = prog_row[1] if len(prog_row) > 1 else "0"
+    available = prog_row[2] if len(prog_row) > 2 else "Немає даних"
+    status = prog_row[3] if len(prog_row) > 3 else "Новачок"
+
+    text = (
+        f"📈 *Ваш прогрес*\n\n"
+        f"👤 Нік: {nick}\n"
+        f"💰 Баланс: *{balance_val} МК*\n"
+        f"🎯 Статус: *{status}*\n\n"
+        f"🛒 Доступно для купівлі:\n{available}"
+    )
     await update.message.reply_text(text, parse_mode="Markdown")
 
 # ---------- MAIN ----------
@@ -253,3 +278,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
