@@ -354,20 +354,21 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^🧾 Мій баланс$"), my_balance))
     app.add_handler(MessageHandler(filters.Regex("^🛒 Магазин$"), show_market))
     app.add_handler(MessageHandler(filters.Regex("^📈 Мій прогрес$"), my_progress))
-    app.add_handler(CallbackQueryHandler(open_buy_menu, pattern="^open_buy_menu$"))
-    app.add_handler(CallbackQueryHandler(process_buy, pattern="^buy:"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.add_handler(
+        app.add_handler(
     MessageHandler(
         filters.Regex("^📢 Повідомити про нарахування$"),
         notify_rewards
     )
 )
+    app.add_handler(CallbackQueryHandler(open_buy_menu, pattern="^open_buy_menu$"))
+    app.add_handler(CallbackQueryHandler(process_buy, pattern="^buy:"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     app.run_polling()
 
 if __name__ == "__main__":
     main()
+
 
 
 
