@@ -3,6 +3,7 @@ import os
 import traceback
 import sys
 import time
+import asyncio
 from threading import Thread
 from flask import Flask
 from dotenv import load_dotenv
@@ -47,6 +48,10 @@ from sheets import (
 )
 
 TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_TELEGRAM_IDS = {444726017}  # ваш Telegram ID
+
+def is_admin(update: Update) -> bool:
+    return update.effective_user.id in ADMIN_TELEGRAM_IDS
 
 # ---------- GLOBAL CACHING SYSTEM ----------
 class BotCache:
@@ -93,10 +98,19 @@ def get_user_nick_from_cache(user_id):
     return None
 
 # ---------- MENU ----------
-MENU = ReplyKeyboardMarkup(
-    [["🧾 Мій баланс", "🛒 Магазин"], ["📈 Мій прогрес"]],
-    resize_keyboard=True,
-)
+def get_menu(is_admin_user=False):
+    keyboard = [
+        ["🧾 Мій баланс", "🛒 Магазин"],
+        ["📈 Мій прогрес"],
+    ]
+
+    if is_admin_user:
+        keyboard.append(["📢 Повідомити про нарахування"])
+
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True
+    )
 
 # ---------- COMMANDS ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -131,7 +145,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["awaiting_nick"] = False
         
         await cache.update(force=True) # Оновлюємо кеш після реєстрації
-        await update.message.reply_text(f"✅ Вітаю, {nick}! Акаунт привʼязано.", reply_markup=MENU)
+        await update.message.reply_text(f"✅ Вітаю, {nick}! Акаунт привʼязано.", reply_markup=get_menu(is_admin(update)))
 
     except Exception as e:
         await update.message.reply_text(f"⚠️ Помилка: {e}")
@@ -281,6 +295,48 @@ async def my_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
+# ----------------NEWSLETTER------------
+from sheets import get_players_sheet
+
+
+async def notify_rewards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        return
+
+    ws = get_players_sheet()
+    rows = ws.get_all_values()
+
+    sent = 0
+
+for i in range(1, len(rows)):
+    telegram_id = rows[i][3]  # колонка D
+
+    if telegram_id:
+        try:
+            await context.bot.send_message(
+                chat_id=int(telegram_id),
+                text=(
+                    "🪙 Мафкоїни нараховано!\n\n"
+                    "Перевірте свій баланс у MafMarket 🖤"
+                ),
+                parse_mode="HTML"
+            )
+
+            sent += 1
+
+            await asyncio.sleep(0.05)
+
+        except:
+            pass
+
+    await update.message.reply_text(f"Розіслано: {sent}")
+
+app.add_handler(
+    MessageHandler(
+        filters.Regex("^📢 Повідомити про нарахування$"),
+        notify_rewards
+    )
+)
 # ---------- MAIN ----------
 def main():
     if not TOKEN: return
@@ -300,6 +356,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
