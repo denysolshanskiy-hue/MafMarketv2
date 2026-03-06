@@ -354,7 +354,7 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^🧾 Мій баланс$"), my_balance))
     app.add_handler(MessageHandler(filters.Regex("^🛒 Магазин$"), show_market))
     app.add_handler(MessageHandler(filters.Regex("^📈 Мій прогрес$"), my_progress))
-        app.add_handler(
+    app.add_handler(
     MessageHandler(
         filters.Regex("^📢 Повідомити про нарахування$"),
         notify_rewards
@@ -368,6 +368,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
