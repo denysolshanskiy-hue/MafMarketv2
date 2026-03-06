@@ -296,49 +296,53 @@ async def my_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 # ----------------NEWSLETTER------------
+# ---------------- NEWSLETTER ----------------
+
 from sheets import get_players_sheet
 
-
 async def notify_rewards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     if not is_admin(update):
+        await update.message.reply_text("⛔ Тільки для адміністратора.")
         return
 
     ws = get_players_sheet()
     rows = ws.get_all_values()
 
     sent = 0
+    failed = 0
 
-async def notify_rewards(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-
-    ws = get_players_sheet()
-    rows = ws.get_all_values()
-
-    sent = 0
+    await update.message.reply_text("📤 Починаю розсилку...")
 
     for i in range(1, len(rows)):
-        telegram_id = rows[i][3]  # колонка D
 
-        if telegram_id:
-            try:
-                await context.bot.send_message(
-                    chat_id=int(telegram_id),
-                    text=(
-                        "🪙 <b>Мафкоїни нараховано!</b>\n\n"
-                        "Перевірте свій баланс у MafMarket 🖤"
-                    ),
-                    parse_mode="HTML"
-                )
+        telegram_id = rows[i][3]
 
-                sent += 1
+        if not telegram_id:
+            continue
 
-                await asyncio.sleep(0.05)
+        try:
+            await context.bot.send_message(
+                chat_id=int(telegram_id),
+                text=(
+                    "🪙 <b>Мафкоїни нараховано!</b>\n\n"
+                    "Перевірте свій баланс у MafMarket 🖤"
+                ),
+                parse_mode="HTML"
+            )
 
-            except Exception:
-                pass
+            sent += 1
+            await asyncio.sleep(0.04)
 
-    await update.message.reply_text(f"Розіслано: {sent}")
+        except Exception as e:
+            print(f"Помилка {telegram_id}: {e}")
+            failed += 1
+
+    await update.message.reply_text(
+        f"✅ Розсилка завершена\n\n"
+        f"📨 Відправлено: {sent}\n"
+        f"⚠️ Помилок: {failed}"
+    )
 # ---------- MAIN ----------
 def main():
     if not TOKEN: return
@@ -353,11 +357,18 @@ def main():
     app.add_handler(CallbackQueryHandler(open_buy_menu, pattern="^open_buy_menu$"))
     app.add_handler(CallbackQueryHandler(process_buy, pattern="^buy:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(
+    MessageHandler(
+        filters.Regex("^📢 Повідомити про нарахування$"),
+        notify_rewards
+    )
+)
 
     app.run_polling()
 
 if __name__ == "__main__":
     main()
+
 
 
 
