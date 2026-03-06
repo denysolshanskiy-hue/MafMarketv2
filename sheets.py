@@ -48,7 +48,9 @@ def get_spreadsheet():
     if not _spreadsheet:
         _spreadsheet = get_client().open(os.getenv("SPREADSHEET_NAME"))
     return _spreadsheet
-
+    
+def get_players_sheet():
+    return get_spreadsheet().worksheet("Гравці🕵️‍♂️")
 # --- ФУНКЦІЇ, ЩО ЗАЛИШАЮТЬСЯ ДЛЯ ЗАПИСУ/ОНОВЛЕННЯ ---
 
 def find_player_by_nick(nick: str):
@@ -79,3 +81,4 @@ def get_market_items():
     # Використовується кешем для початкового завантаження
     rows = get_spreadsheet().worksheet("🖤MafMarket🖤").get_all_values()
     return [{"name": r[0], "price": r[1], "description": r[2], "level": r[3]} for r in rows[2:] if r and r[0]]
+
