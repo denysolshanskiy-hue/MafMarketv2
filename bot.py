@@ -308,35 +308,37 @@ async def notify_rewards(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     sent = 0
 
-for i in range(1, len(rows)):
-    telegram_id = rows[i][3]  # колонка D
+async def notify_rewards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        return
 
-    if telegram_id:
-        try:
-            await context.bot.send_message(
-                chat_id=int(telegram_id),
-                text=(
-                    "🪙 Мафкоїни нараховано!\n\n"
-                    "Перевірте свій баланс у MafMarket 🖤"
-                ),
-                parse_mode="HTML"
-            )
+    ws = get_players_sheet()
+    rows = ws.get_all_values()
 
-            sent += 1
+    sent = 0
 
-            await asyncio.sleep(0.05)
+    for i in range(1, len(rows)):
+        telegram_id = rows[i][3]  # колонка D
 
-        except:
-            pass
+        if telegram_id:
+            try:
+                await context.bot.send_message(
+                    chat_id=int(telegram_id),
+                    text=(
+                        "🪙 <b>Мафкоїни нараховано!</b>\n\n"
+                        "Перевірте свій баланс у MafMarket 🖤"
+                    ),
+                    parse_mode="HTML"
+                )
+
+                sent += 1
+
+                await asyncio.sleep(0.05)
+
+            except Exception:
+                pass
 
     await update.message.reply_text(f"Розіслано: {sent}")
-
-app.add_handler(
-    MessageHandler(
-        filters.Regex("^📢 Повідомити про нарахування$"),
-        notify_rewards
-    )
-)
 # ---------- MAIN ----------
 def main():
     if not TOKEN: return
@@ -356,6 +358,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
