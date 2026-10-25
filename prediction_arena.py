@@ -20,6 +20,7 @@ STATE_HEADERS = ["Гра", "Тип прогнозу", "Статус", "Дедл�
 LABELS = {"winner": "Команда-переможець", "first_killed": "Перший убитий гравець", "first_exiled": "Перший вигнаний гравець", "best_move": "Найкращий хід"}
 REWARDS = {"winner": 50, "first_killed": 50, "first_exiled": 50}
 LOCK = threading.RLock()
+_PLAYER_CACHE = {"at": 0.0, "data": {}}
 
 
 def _now():
@@ -62,11 +63,17 @@ def _sheets():
 
 
 def _players():
-    result = {}
-    for row in get_players_sheet().get_all_values()[1:]:
-        if len(row) > 3 and row[3].strip() and len(row) > 1 and row[1].strip():
-            result[str(row[3]).strip()] = row[1].strip()
-    return result
+    now = time.time()
+    with LOCK:
+        if now - _PLAYER_CACHE["at"] < 30:
+            return dict(_PLAYER_CACHE["data"])
+        result = {}
+        for row in get_players_sheet().get_all_values()[1:]:
+            if len(row) > 3 and row[3].strip() and len(row) > 1 and row[1].strip():
+                result[str(row[3]).strip()] = row[1].strip()
+        _PLAYER_CACHE["at"] = now
+        _PLAYER_CACHE["data"] = result
+        return dict(result)
 
 
 def _is_admin(user_id):
@@ -92,8 +99,9 @@ def _identity():
     if not received or not hmac.compare_digest(expected, received):
         raise PermissionError("Не вдалося перевірити Telegram-сесію.")
     try:
-        if int(data.get("auth_date", "0")) < time.time() - 86400:
-            raise PermissionError("Сесія застаріла. Закрий та повторно відкрий Mini App.")
+        auth_date = int(data.get("auth_date", "0"))
+        if auth_date < time.time() - 86400 or auth_date > time.time() + 60:
+            raise PermissionError("Сесія застаріла або має некоректний час. Перезапусти Mini App.")
         user = json.loads(data.get("user", "{}"))
         uid = int(user["id"])
     except (ValueError, KeyError, TypeError, json.JSONDecodeError):
@@ -434,5 +442,5 @@ async function submitBest(g){if(best.size!==3){msg("Обери три різні
 async function adminAction(action){var g=Number(el("agame").value),t=el("atype").value,b={game:g,type:t};if(action==="open")b.duration_seconds=Number(el("duration").value||60);if(action==="settle"){if(t==="best_move"){if(correct.size!==3){msg("Обери три правильні номери.","error");return}b.correct_answer=Array.from(correct).sort(function(a,b){return a-b})}else b.correct_answer=el("correct").value}try{var d=await api("/api/predictions/admin/"+action,b);msg(d.message||"Готово.","success");correct.clear();await refresh()}catch(e){msg(e.message,"error")}}
 el("atype").addEventListener("change",renderEditor);
 async function refresh(){try{state=await api("/api/predictions/state");el("loading").classList.add("hidden");render()}catch(e){el("loading").textContent=e.message}}
-if(!initData)el("loading").textContent="Відкрий сторінку через кнопку в Telegram MafMarket.";else{refresh();setInterval(refresh,5000)}
+if(!initData)el("loading").textContent="Відкрий сторінку через кнопку в Telegram MafMarket.";else{refresh();setInterval(refresh,15000)}
 </script></body></html>'''
