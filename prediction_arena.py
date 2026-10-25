@@ -16,7 +16,7 @@ from sheets import get_spreadsheet, get_players_sheet
 BET_SHEET = "Ставки🎯"
 STATE_SHEET = "СтавкиСтан"
 HEADERS = ["id", "Нік", "Гра", "Тип прогнозу", "Прогноз", "Правильна відповідь", "Збіги", "Сума МК", "Prediction ID", "Статус", "Подано о"]
-STATE_HEADERS = ["Гра", "Тип прогнозу", "Статус", "Дедлайн ISO", "Правильна відповідь", "Відкрито о", "Закрито о", "Розраховано о", "Тривалість секунд"]
+STATE_HEADERS = ["Гра", "Тип прогнозу", "Статус", "Дедлайн ISO", "Правильна відповідь", "Відкрито о", "Закрито о", "Розраховано о", "Тривалість секунд"]  # Stored internally in seconds
 LABELS = {"winner": "Команда-переможець", "first_killed": "Перший убитий гравець", "first_exiled": "Перший вигнаний гравець", "best_move": "Найкращий хід"}
 REWARDS = {"winner": 50, "first_killed": 50, "first_exiled": 50}
 LOCK = threading.RLock()
@@ -316,11 +316,18 @@ def register_prediction_routes(app):
         data = request.get_json(silent=True) or {}
         try:
             game, kind = _int(data.get("game")), _kind(data.get("type"))
-            duration = _int(data.get("duration_seconds"), 60)
+            # The admin UI accepts minutes; retain duration_seconds as a backward-compatible API field.
+            if "duration_minutes" in data:
+                duration_minutes = _int(data.get("duration_minutes"))
+                if duration_minutes is None or not 1 <= duration_minutes <= 60:
+                    raise ValueError("Тривалість має бути від 1 до 60 хвилин.")
+                duration = duration_minutes * 60
+            else:
+                duration = _int(data.get("duration_seconds"), 60)
+                if duration is None or not 15 <= duration <= 3600:
+                    raise ValueError("Тривалість має бути від 15 до 3600 секунд.")
             if game is None or not 1 <= game <= 10:
                 raise ValueError("Гра має бути від 1 до 10.")
-            if duration is None or not 15 <= duration <= 3600:
-                raise ValueError("Тривалість має бути від 15 до 3600 секунд.")
             with LOCK:
                 _, states = _sheets()
                 _, existing = _state_find(states, game, kind)
@@ -329,7 +336,7 @@ def register_prediction_routes(app):
                 now = datetime.now(timezone.utc)
                 deadline = datetime.fromtimestamp(now.timestamp() + duration, timezone.utc).isoformat(timespec="seconds")
                 _write_state(states, game, kind, "open", deadline, "", now.isoformat(timespec="seconds"), "", "", duration)
-            _notify("🎯 KMC Prediction Arena — гра %s/10\nВідкрито: %s\nЧас на відповідь: %s с." % (game, _label(kind), duration))
+            _notify("🎯 KMC Prediction Arena — гра %s/10\nВідкрито: %s\nЧас на відповідь: %s хв." % (game, _label(kind), duration // 60 if duration % 60 == 0 else round(duration / 60, 2)))
             return jsonify({"ok": True, "message": "Прогноз відкрито.", "deadline": deadline})
         except PermissionError as exc:
             return jsonify({"error": str(exc)}), 401
@@ -423,7 +430,7 @@ _HTML = r'''<!doctype html>
 <div class="stats"><div class="stat"><span class="muted small">Зароблено у фіналі</span><strong id="total">— МК</strong></div><div class="stat"><span class="muted small">Місце в рейтингу</span><strong id="rank">—</strong></div></div>
 <div id="message" class="notice hidden"></div><div id="loading" class="notice">Завантажую арену…</div>
 <section id="participant" class="hidden"><div class="head">🎯 Доступні прогнози</div><div id="predictions" class="grid"></div><div class="head">📜 Мої результати</div><div id="mine" class="card muted">Поки що немає прогнозів.</div><div class="head">🥇 Рейтинг</div><div id="board" class="card"></div></section>
-<section id="admin" class="hidden"><div class="head">🛠 Панель організатора</div><div class="card"><label>Гра<select id="agame" class="form"></select></label><label>Категорія<select id="atype" class="form"><option value="winner">Команда-переможець</option><option value="first_killed">Перший убитий гравець</option><option value="first_exiled">Перший вигнаний гравець</option><option value="best_move">Найкращий хід</option></select></label><label>Тривалість (сек.)<input id="duration" class="form" type="number" min="15" max="3600" value="60"></label><button class="btn" onclick="adminAction('open')">Відкрити прогноз</button><button class="btn secondary" onclick="adminAction('close')">Закрити прогноз</button><div class="head">Правильна відповідь</div><div id="editor"></div><button class="btn" onclick="adminAction('settle')">Підтвердити результат і нарахувати МК</button><div class="head">Стан прогнозів</div><div id="states"></div></div></section>
+<section id="admin" class="hidden"><div class="head">🛠 Панель організатора</div><div class="card"><label>Гра<select id="agame" class="form"></select></label><label>Категорія<select id="atype" class="form"><option value="winner">Команда-переможець</option><option value="first_killed">Перший убитий гравець</option><option value="first_exiled">Перший вигнаний гравець</option><option value="best_move">Найкращий хід</option></select></label><label>Тривалість (хв.)<input id="duration" class="form" type="number" min="1" max="60" step="1" value="1"></label><button class="btn" onclick="adminAction('open')">Відкрити прогноз</button><button class="btn secondary" onclick="adminAction('close')">Закрити прогноз</button><div class="head">Правильна відповідь</div><div id="editor"></div><button class="btn" onclick="adminAction('settle')">Підтвердити результат і нарахувати МК</button><div class="head">Стан прогнозів</div><div id="states"></div></div></section>
 <div class="footer">MafMarket · За неправильні прогнози MafCoins не списуються.</div></main>
 <script>
 var tg=window.Telegram&&window.Telegram.WebApp;if(tg){tg.ready();tg.expand()}var initData=tg?tg.initData:"";var state=null;var best=new Set();var correct=new Set();var labels={winner:"Команда-переможець",first_killed:"Перший убитий гравець",first_exiled:"Перший вигнаний гравець",best_move:"Найкращий хід"};
@@ -439,7 +446,7 @@ function renderEditor(){var t=el("atype").value,html="",i;correct.clear();if(t==
 function toggleCorrect(n){if(correct.has(n))correct.delete(n);else if(correct.size<3)correct.add(n);document.querySelectorAll("[id^=c]").forEach(function(b){b.classList.toggle("selected",correct.has(Number(b.textContent)))});}
 async function submit(g,t,a){try{await api("/api/predictions/submit",{game:g,type:t,answer:a});msg("✅ Прогноз збережено! Повторна подача в цій категорії заблокована.","success");await refresh()}catch(e){msg(e.message,"error")}}
 async function submitBest(g){if(best.size!==3){msg("Обери три різні номери.","error");return}await submit(g,"best_move",Array.from(best).sort(function(a,b){return a-b}));best.clear()}
-async function adminAction(action){var g=Number(el("agame").value),t=el("atype").value,b={game:g,type:t};if(action==="open")b.duration_seconds=Number(el("duration").value||60);if(action==="settle"){if(t==="best_move"){if(correct.size!==3){msg("Обери три правильні номери.","error");return}b.correct_answer=Array.from(correct).sort(function(a,b){return a-b})}else b.correct_answer=el("correct").value}try{var d=await api("/api/predictions/admin/"+action,b);msg(d.message||"Готово.","success");correct.clear();await refresh()}catch(e){msg(e.message,"error")}}
+async function adminAction(action){var g=Number(el("agame").value),t=el("atype").value,b={game:g,type:t};if(action==="open")b.duration_minutes=Number(el("duration").value||1);if(action==="settle"){if(t==="best_move"){if(correct.size!==3){msg("Обери три правильні номери.","error");return}b.correct_answer=Array.from(correct).sort(function(a,b){return a-b})}else b.correct_answer=el("correct").value}try{var d=await api("/api/predictions/admin/"+action,b);msg(d.message||"Готово.","success");correct.clear();await refresh()}catch(e){msg(e.message,"error")}}
 el("atype").addEventListener("change",renderEditor);
 async function refresh(){try{state=await api("/api/predictions/state");el("loading").classList.add("hidden");render()}catch(e){el("loading").textContent=e.message}}
 if(!initData)el("loading").textContent="Відкрий сторінку через кнопку в Telegram MafMarket.";else{refresh();setInterval(refresh,15000)}
