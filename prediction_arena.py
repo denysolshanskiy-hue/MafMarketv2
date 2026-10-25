@@ -51,9 +51,12 @@ def _sheets():
         for i, h in enumerate(HEADERS):
             current = old[i] if i < len(old) else ""
             names.append(current if i in (0, 1, 7) and current.strip() else h)
-        bets.update("A1:K1", [names])
+        current_header = (old + [""] * len(HEADERS))[:len(HEADERS)]
+        if names != current_header:
+            bets.update("A1:K1", [names])
     old_state = states.row_values(1)
-    if not old_state or old_state[0] != STATE_HEADERS[0]:
+    state_header = (old_state + [""] * len(STATE_HEADERS))[:len(STATE_HEADERS)]
+    if state_header != STATE_HEADERS:
         states.update("A1:I1", [STATE_HEADERS])
     return bets, states
 
@@ -313,8 +316,8 @@ def register_prediction_routes(app):
             with LOCK:
                 _, states = _sheets()
                 _, existing = _state_find(states, game, kind)
-                if existing and existing[2] in ("open", "settled"):
-                    raise ValueError("Прогноз уже відкритий або розрахований.")
+                if existing and existing[2] in ("open", "locked", "settled"):
+                    raise ValueError("Цей прогноз уже відкривали. Повторно відкривати його не можна.")
                 now = datetime.now(timezone.utc)
                 deadline = datetime.fromtimestamp(now.timestamp() + duration, timezone.utc).isoformat(timespec="seconds")
                 _write_state(states, game, kind, "open", deadline, "", now.isoformat(timespec="seconds"), "", "", duration)
