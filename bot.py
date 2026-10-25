@@ -41,8 +41,7 @@ from telegram.ext import (
 # Імпортуємо функції
 from sheets import (
     get_spreadsheet,
-    find_player_by_nick,
-    bind_telegram_id,
+    register_or_bind_player,
     get_market_items,
     add_purchase
 )
@@ -115,11 +114,23 @@ def get_menu(is_admin_user=False):
 
 # ---------- COMMANDS ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await cache.update() # Підвантажуємо дані при старті
-    await update.message.reply_text(
-        "Вітаю в MafMarket 🖤\n\nВведіть свій нік, щоб привʼязати акаунт:"
-    )
+    await cache.update(force=True)
+    existing_nick = get_user_nick_from_cache(update.effective_user.id)
+    if existing_nick:
+        context.user_data["awaiting_nick"] = False
+        await update.message.reply_text(
+            f"Вітаю знову, {existing_nick}! 🖤\nТвій Telegram-акаунт уже прив'язаний.",
+            reply_markup=get_menu(is_admin(update))
+        )
+        return
+
     context.user_data["awaiting_nick"] = True
+    await update.message.reply_text(
+        "Вітаю в MafMarket 🖤\n\n"
+        "Введи свій ігровий нік. Якщо він уже є в системі, ми збережемо твій наявний прогрес. "
+        "Якщо ти новий гравець, акаунт буде створено автоматично."
+    )
+
 
 async def refresh_cache_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_id = os.getenv("ADMIN_TELEGRAM_ID")
@@ -132,24 +143,33 @@ async def refresh_cache_command(update: Update, context: ContextTypes.DEFAULT_TY
 
 # ---------- AUTH ----------
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data.get("awaiting_nick"): return
+    if not context.user_data.get("awaiting_nick"):
+        return
 
     try:
         nick = update.message.text.strip()
-        row_index, player = find_player_by_nick(nick)
-
-        if not player:
-            await update.message.reply_text("❌ Такий нік не знайдено.")
-            return
-
-        bind_telegram_id(row_index, update.effective_user.id)
+        status, canonical_nick = register_or_bind_player(nick, update.effective_user.id)
         context.user_data["awaiting_nick"] = False
-        
-        await cache.update(force=True) # Оновлюємо кеш після реєстрації
-        await update.message.reply_text(f"✅ Вітаю, {nick}! Акаунт привʼязано.", reply_markup=get_menu(is_admin(update)))
+        await cache.update(force=True)
 
+        if status == "created":
+            message = (
+                f"✅ Вітаю, {canonical_nick}! Твій акаунт створено й прив'язано.\n\n"
+                "Ти з'явишся в балансі та прогресі автоматично."
+            )
+        else:
+            message = (
+                f"✅ Вітаю, {canonical_nick}! Твій Telegram-акаунт прив'язано.\n"
+                "Наявний прогрес і історія збережені."
+            )
+
+        await update.message.reply_text(message, reply_markup=get_menu(is_admin(update)))
+
+    except ValueError as e:
+        await update.message.reply_text(f"⚠️ {e}\n\nВведи свій ігровий нік ще раз або звернись до організатора.")
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Помилка: {e}")
+        print(f"Помилка самореєстрації Telegram ID {update.effective_user.id}: {e}")
+        await update.message.reply_text("⚠️ Не вдалося завершити реєстрацію. Спробуй ще раз трохи пізніше.")
 
 
 # ---------- BALANCE (МИТТЄВО) ----------
