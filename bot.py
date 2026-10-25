@@ -28,7 +28,7 @@ def keep_alive():
     t.start()
 
 # ---------- IMPORTS ----------
-from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -102,6 +102,7 @@ def get_menu(is_admin_user=False):
     keyboard = [
         ["🧾 Мій баланс", "🛒 Магазин"],
         ["📈 Мій прогрес"],
+        ["🏆 Прогнози KMC"],
     ]
 
     if is_admin_user:
@@ -299,6 +300,10 @@ async def my_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------- NEWSLETTER ----------------
 
 from sheets import get_players_sheet
+from prediction_arena import register_prediction_routes
+
+# Adds prediction routes to the existing Flask server; root keep-alive route is preserved.
+register_prediction_routes(flask_app)
 
 async def notify_rewards(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -343,6 +348,41 @@ async def notify_rewards(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📨 Відправлено: {sent}\n"
         f"⚠️ Помилок: {failed}"
     )
+
+# ---------- KMC PREDICTION ARENA ----------
+async def open_predictions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    nick = get_user_nick_from_cache(update.effective_user.id)
+    if not nick:
+        await update.message.reply_text("❌ Спочатку прив’яжи свій нік у MafMarket через /start.")
+        return
+
+    webapp_url = os.getenv("PREDICTIONS_WEBAPP_URL", "").strip()
+    if not webapp_url:
+        base_url = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+        if base_url:
+            webapp_url = base_url + "/predictions"
+
+    if not webapp_url.startswith("https://"):
+        await update.message.reply_text(
+            "⚙️ KMC Prediction Arena підготовлена, але ще не налаштована для відкриття. "
+            "Адміністратору потрібно встановити PREDICTIONS_WEBAPP_URL на HTTPS-адресу "
+            "цього сервісу з шляхом /predictions."
+        )
+        return
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "🏆 Відкрити KMC Prediction Arena",
+            web_app=WebAppInfo(url=webapp_url)
+        )
+    ]])
+    await update.message.reply_text(
+        "🎯 Прогнози KMC\\n\\nВідкрий арену, щоб робити прогнози, "
+        "перевіряти результати та стежити за рейтингом.",
+        reply_markup=keyboard
+    )
+
+
 # ---------- MAIN ----------
 def main():
     if not TOKEN: return
@@ -354,6 +394,7 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^🧾 Мій баланс$"), my_balance))
     app.add_handler(MessageHandler(filters.Regex("^🛒 Магазин$"), show_market))
     app.add_handler(MessageHandler(filters.Regex("^📈 Мій прогрес$"), my_progress))
+    app.add_handler(MessageHandler(filters.Regex("^🏆 Прогнози KMC$"), open_predictions))
     app.add_handler(
     MessageHandler(
         filters.Regex("^📢 Повідомити про нарахування$"),
