@@ -197,18 +197,25 @@ def _close_expired(states):
             states.update_cell(row_no, 7, _now())
 
 
-def _notify(text):
+def _notify(text, include_app_button=False):
     chat_id = os.getenv("PREDICTIONS_CHAT_ID", "").strip()
     token = os.getenv("BOT_TOKEN", "").strip()
     if not chat_id or not token:
         print("KMC predictions: PREDICTIONS_CHAT_ID is not configured; skipped group notification.")
         return
     try:
-        data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
+        payload = {"chat_id": chat_id, "text": text}
+        app_url = os.getenv("PREDICTIONS_WEBAPP_URL", "").strip()
+        if include_app_button and app_url.startswith("https://"):
+            payload["reply_markup"] = json.dumps({
+                "inline_keyboard": [[{"text": "🎯 Відкрити KMC Prediction Arena", "url": app_url}]]
+            }, ensure_ascii=False)
+        data = urllib.parse.urlencode(payload).encode()
         req = urllib.request.Request("https://api.telegram.org/bot" + token + "/sendMessage", data=data)
         with urllib.request.urlopen(req, timeout=8) as response:
-            if response.status >= 300:
-                print("KMC prediction notification returned HTTP", response.status)
+            result = json.loads(response.read().decode("utf-8"))
+            if response.status >= 300 or not result.get("ok"):
+                print("KMC prediction notification returned an error:", result)
     except Exception as exc:
         print("KMC prediction notification failed:", exc)
 
@@ -336,7 +343,7 @@ def register_prediction_routes(app):
                 now = datetime.now(timezone.utc)
                 deadline = datetime.fromtimestamp(now.timestamp() + duration, timezone.utc).isoformat(timespec="seconds")
                 _write_state(states, game, kind, "open", deadline, "", now.isoformat(timespec="seconds"), "", "", duration)
-            _notify("🎯 KMC Prediction Arena — гра %s/10\nВідкрито: %s\nЧас на відповідь: %s хв." % (game, _label(kind), duration // 60 if duration % 60 == 0 else round(duration / 60, 2)))
+            _notify("🎯 ВІДКРИТО ПРОГНОЗ — гра %s/10\n📌 %s\n⏳ Час на відповіді: %s хвилин.\nЗаходьте в KMC Prediction Arena та робіть свій прогноз!" % (game, _label(kind), duration // 60 if duration % 60 == 0 else round(duration / 60, 2)), include_app_button=True)
             return jsonify({"ok": True, "message": "Прогноз відкрито.", "deadline": deadline})
         except PermissionError as exc:
             return jsonify({"error": str(exc)}), 401
@@ -361,6 +368,7 @@ def register_prediction_routes(app):
                     raise ValueError("Прогноз не відкритий.")
                 states.update_cell(row_no, 3, "locked")
                 states.update_cell(row_no, 7, _now())
+            _notify("🔒 ПРОГНОЗ ЗАКРИТО — гра %s/10\n📌 %s\nПриймання відповідей завершено. Очікуйте результатів!" % (game, _label(kind)))
             return jsonify({"ok": True, "message": "Прогноз закрито."})
         except PermissionError as exc:
             return jsonify({"error": str(exc)}), 401
